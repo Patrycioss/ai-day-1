@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple 2D Platformer — Single File</title>
+  <style>
+    html,body{height:100%;margin:0;background:#1b1f2b;font-family:Inter,system-ui,Arial;color:#e6eef8}
+    .wrap{display:flex;flex-direction:column;align-items:center;padding:18px}
+    canvas{background:linear-gradient(#87ceeb, #dff3ff 40%, #6fbf73 100%);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.45)}
+    .ui{margin-top:12px;text-align:center}
+    .hint{opacity:.9;font-size:14px}
+    .score{font-weight:700}
+    a{color:#bcdcff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game" width="960" height="540"></canvas>
+    <div class="ui">
+      <div class="hint">Arrows / A D to move — Space / W / Up to jump — R to restart</div>
+      <div class="hint">Collect stars to increase score. Fall off screen to respawn.</div>
+      <div class="hint score" id="score">Score: 0</div>
+    </div>
+  </div>
+
+<script>
+// Simple 2D platformer — single HTML file
+// Features: player physics, platforms (tiles), collisions, camera follow, collectibles, restart
+
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // --- Utilities ---
+  const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+  // --- Input ---
+  const keys = {};
+  window.addEventListener('keydown', e => { keys[e.code] = true; if(['ArrowUp','Space','KeyW'].includes(e.code)) e.preventDefault(); });
+  window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+  // --- Level (tile-based) ---
+  // 0 = empty, 1 = solid block, 2 = star collectible
+  const tileSize = 48;
+  // Simple level layout (array of rows). You can edit this to change levels.
+  const levelRows = [
+    '000000000000000000000000',
+    '000000000000000000000000',
+    '000000000000000000000000',
+    '000000000000000000000000',
+    '000000000200000000000000',
+    '000000001111000000000000',
+    '000000000000000000000000',
+    '000011100000001110000000',
+    '000000000000000000000000',
+    '111111111111111111111111',
+  ];
+
+  const level = levelRows.map(r => r.split('').map(ch => Number(ch)));
+  const levelWidth = level[0].length * tileSize;
+  const levelHeight = level.length * tileSize;
+
+  // --- Game state ---
+  const player = {
+    x: 120, y: 0,
+    w: 34, h: 44,
+    vx: 0, vy: 0,
+    speed: 220,
+    jumpPow: 450,
+    onGround: false,
+    canDoubleJump: true
+  };
+
+  let score = 0;
+  const scoreEl = document.getElementById('score');
+
+  // Camera
+  const cam = { x: 0, y: 0, w: W, h: H };
+
+  // --- Collision helpers ---
+  function tileAtWorld(x,y){
+    if(x < 0 || y < 0 || x >= levelWidth || y >= levelHeight) return 0;
+    const tx = Math.floor(x / tileSize), ty = Math.floor(y / tileSize);
+    return level[ty][tx];
+  }
+
+  function setTileAtWorld(x,y,val){
+    if(x < 0 || y < 0 || x >= levelWidth || y >= levelHeight) return;
+    const tx = Math.floor(x / tileSize), ty = Math.floor(y / tileSize);
+    level[ty][tx] = val;
+  }
+
+  // Axis aligned box collision check against level solids
+  function movePlayer(dt){
+    // horizontal
+    player.x += player.vx * dt;
+    // check horizontal collisions
+    const left = player.x, right = player.x + player.w;
+    const top = player.y, bottom = player.y + player.h;
+    // check points along vertical edges
+    for(let y = top + 1; y <= bottom - 1; y += Math.max(1, Math.floor(player.h/2))){
+      if(player.vx > 0 && tileAtWorld(right, y) === 1){
+        player.x = Math.floor((right) / tileSize) * tileSize - player.w - 0.0001;
+        player.vx = 0;
+      } else if(player.vx < 0 && tileAtWorld(left, y) === 1){
+        player.x = Math.floor((left) / tileSize + 1) * tileSize + 0.0001;
+        player.vx = 0;
+      }
+    }
+
+    // vertical
+    player.y += player.vy * dt;
+    const newTop = player.y, newBottom = player.y + player.h;
+    player.onGround = false;
+    for(let x = left + 1; x <= right - 1; x += Math.max(1, Math.floor(player.w/2))){
+      if(player.vy > 0 && tileAtWorld(x, newBottom) === 1){
+        player.y = Math.floor(newBottom / tileSize) * tileSize - player.h - 0.0001;
+        player.vy = 0;
+        player.onGround = true;
+        player.canDoubleJump = true;
+      } else if(player.vy < 0 && tileAtWorld(x, newTop) === 1){
+        player.y = Math.floor(newTop / tileSize + 1) * tileSize + 0.0001;
+        player.vy = 0;
+      }
+    }
+
+    // Collectibles (tile type 2)
+    for(let x = left; x <= right; x += Math.max(1, Math.floor(player.w/2))){
+      for(let y = top; y <= bottom; y += Math.max(1, Math.floor(player.h/2))){
+        if(tileAtWorld(x,y) === 2){
+          // remove star
+          setTileAtWorld(x,y,0);
+          score += 1;
+          scoreEl.textContent = 'Score: ' + score;
+        }
+      }
+    }
+  }
+
+  // --- Game loop ---
+  let last = performance.now();
+  function step(now){
+    const dt = Math.min(1/30, (now - last) / 1000);
+    last = now;
+
+    // input
+    const left = keys['ArrowLeft'] || keys['KeyA'];
+    const right = keys['ArrowRight'] || keys['KeyD'];
+    const upPressed = keys['Space'] || keys['ArrowUp'] || keys['KeyW'];
+
+    const accel = 1800;
+    const friction = player.onGround ? 18 : 6;
+
+    if(left) player.vx -= accel * dt;
+    if(right) player.vx += accel * dt;
+    // apply friction
+    player.vx -= player.vx * Math.min(1, friction * dt);
+    player.vx = clamp(player.vx, -player.speed, player.speed);
+
+    // gravity
+    const gravity = 1400;
+    player.vy += gravity * dt;
+    player.vy = clamp(player.vy, -1200, 1200);
+
+    // Jump handling (detect just-pressed)
+    if((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && !player._jumpHeld){
+      if(player.onGround){
+        player.vy = -player.jumpPow;
+        player.onGround = false;
+        player.canDoubleJump = true;
+      } else if(player.canDoubleJump){
+        player.vy = -player.jumpPow * 0.9;
+        player.canDoubleJump = false;
+      }
+    }
+    player._jumpHeld = Boolean(keys['Space'] || keys['ArrowUp'] || keys['KeyW']);
+
+    // Movement & collisions
+    movePlayer(dt);
+
+    // Respawn if fall off
+    if(player.y > levelHeight + 500){
+      respawn();
+    }
+
+    // camera follow (smooth)
+    cam.x += ((player.x + player.w/2) - (cam.x + cam.w/2)) * 6 * dt;
+    cam.y += ((player.y + player.h/2) - (cam.y + cam.h/2)) * 6 * dt;
+    cam.x = clamp(cam.x, 0, Math.max(0, levelWidth - cam.w));
+    cam.y = clamp(cam.y, 0, Math.max(0, levelHeight - cam.h));
+
+    // render
+    render();
+
+    requestAnimationFrame(step);
+  }
+
+  function respawn(){
+    player.x = 120; player.y = -20; player.vx = 0; player.vy = 0; player.canDoubleJump = true; player.onGround = false;
+  }
+
+  // --- Rendering ---
+  function render(){
+    // clear
+    ctx.clearRect(0,0,W,H);
+
+    // background parallax
+    ctx.fillStyle = '#89d18a';
+    ctx.fillRect(0, H - 140 - (cam.y*0.1), W, 200);
+
+    // draw tiles
+    const startCol = Math.floor(cam.x / tileSize);
+    const endCol = Math.floor((cam.x + cam.w) / tileSize);
+    const startRow = Math.floor(cam.y / tileSize);
+    const endRow = Math.floor((cam.y + cam.h) / tileSize);
+
+    for(let r = startRow; r <= endRow; r++){
+      for(let c = startCol; c <= endCol; c++){
+        const row = level[r];
+        if(!row) continue;
+        const t = row[c];
+        const x = c*tileSize - cam.x;
+        const y = r*tileSize - cam.y;
+        if(t === 1){
+          // solid block
+          ctx.fillStyle = '#6b4f2b';
+          roundRect(ctx, x+2, y+2, tileSize-4, tileSize-4, 6, true, false);
+          // highlight
+          ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        } else if(t === 2){
+          // collectible star (drawn as yellow circle + sparkle)
+          const cx = x + tileSize/2, cy = y + tileSize/2;
+          ctx.beginPath(); ctx.arc(cx, cy, tileSize*0.22, 0, Math.PI*2); ctx.fillStyle = '#ffd24d'; ctx.fill();
+          // small sparkle
+          ctx.beginPath(); ctx.moveTo(cx-6,cy); ctx.lineTo(cx+6,cy); ctx.moveTo(cx,cy-6); ctx.lineTo(cx,cy+6); ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.2; ctx.stroke();
+        }
+      }
+    }
+
+    // player
+    const px = player.x - cam.x, py = player.y - cam.y;
+    // body
+    ctx.fillStyle = '#0f4b8e';
+    roundRect(ctx, px, py, player.w, player.h, 6, true, false);
+    // face / eyes
+    ctx.fillStyle = '#e6eef8';
+    ctx.fillRect(px + player.w - 14, py + 10, 6, 6);
+    ctx.fillRect(px + 6, py + 10, 6, 6);
+
+    // HUD (simple)
+    ctx.fillStyle = 'rgba(11,15,23,0.45)';
+    ctx.fillRect(12,12,160,36);
+    ctx.fillStyle = '#e6eef8';
+    ctx.font = '16px system-ui,Arial';
+    ctx.fillText('Score: ' + score, 22, 36);
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fill, stroke){
+    if(typeof r === 'undefined') r = 5;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+
+  // --- Helpers to edit level at runtime (press E to toggle a star at camera center) ---
+  window.addEventListener('keydown', e => {
+    if(e.code === 'KeyR'){
+      // restart level (reload original layout)
+      // re-parse levelRows
+      for(let r=0;r<level.length;r++){
+        level[r] = levelRows[r].split('').map(ch => Number(ch));
+      }
+      score = 0; scoreEl.textContent = 'Score: ' + score; respawn();
+    }
+    if(e.code === 'KeyE'){
+      const cx = Math.floor((cam.x + cam.w/2) / tileSize);
+      const cy = Math.floor((cam.y + cam.h/2) / tileSize);
+      if(level[cy] && level[cy][cx] !== undefined){
+        level[cy][cx] = level[cy][cx] === 2 ? 0 : 2;
+      }
+    }
+  });
+
+  // place initial stars in some tiles for fun
+  (function scatterStars(){
+    for(let r=0;r<level.length;r++){
+      for(let c=0;c<level[r].length;c++){
+        if(level[r][c] === 0 && Math.random() < 0.03) level[r][c] = 2;
+      }
+    }
+  })();
+
+  // resize canvas to keep aspect ratio / crispness (optional)
+  function fitCanvas(){
+    const maxW = Math.min(window.innerWidth - 36, 1200);
+    const maxH = Math.min(window.innerHeight - 120, 720);
+    const ratio = Math.min(maxW / W, maxH / H, 1);
+    canvas.style.width = Math.floor(W * ratio) + 'px';
+    canvas.style.height = Math.floor(H * ratio) + 'px';
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  // Start
+  respawn();
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>

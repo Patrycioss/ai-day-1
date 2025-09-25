@@ -1,4 +1,10 @@
+Generated with one prompt: https://chatgpt.com/share/68d4e09e-d334-800e-8d7b-a4c4f3d7bcd6
+
+
 # AI for Software Development Day 1 Exercise
+
+
+
 
 ## Learning Objectives
 
